@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 import uvicorn
-from passlib.context import CryptContext
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = FastAPI(title="Бакса Банк")
 
@@ -16,13 +16,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Используем werkzeug для хеширования
 
 users_db = {
     "superadmin": {
         "id": 1,
         "username": "superadmin",
-        "password": pwd_context.hash("admin123"),
+        "password": generate_password_hash("admin123"),  # вместо pwd_context.hash
         "full_name": "Главный Админ",
         "role": "super_admin",
         "balance": 1000000,
@@ -62,7 +62,7 @@ def check_role(username: str, roles: list):
 @app.post("/api/auth/login")
 async def login(user: UserLogin):
     db_user = get_user(user.username)
-    if db_user and pwd_context.verify(user.password, db_user["password"]):
+    if db_user and check_password_hash(db_user["password"], user.password):
         return {
             "success": True,
             "user": {
@@ -86,7 +86,7 @@ async def create_user(user: UserCreate, admin: str = "superadmin"):
     users_db[user.username] = {
         "id": new_id,
         "username": user.username,
-        "password": pwd_context.hash(user.password),
+        "password": generate_password_hash(user.password),
         "full_name": user.full_name,
         "role": user.role,
         "balance": 0,
