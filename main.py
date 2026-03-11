@@ -18,7 +18,6 @@ app.add_middleware(
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ========== БАЗА ДАННЫХ ==========
 users_db = {
     "superadmin": {
         "id": 1,
@@ -28,14 +27,13 @@ users_db = {
         "role": "super_admin",
         "balance": 1000000,
         "cash": 50000,
-        "fcm_token": None,  # сюда сохраним токен устройства для уведомлений
+        "fcm_token": None,
         "created_at": datetime.now().isoformat()
     }
 }
 
 transactions_db = []
 
-# ========== МОДЕЛИ ==========
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -54,10 +52,6 @@ class TransactionCreate(BaseModel):
 class AtmOperation(BaseModel):
     amount: float
 
-class FcmToken(BaseModel):
-    token: str
-
-# ========== ВСПОМОГАТЕЛЬНЫЕ ==========
 def get_user(username: str):
     return users_db.get(username)
 
@@ -65,7 +59,6 @@ def check_role(username: str, roles: list):
     user = get_user(username)
     return user and user["role"] in roles
 
-# ========== АВТОРИЗАЦИЯ ==========
 @app.post("/api/auth/login")
 async def login(user: UserLogin):
     db_user = get_user(user.username)
@@ -83,24 +76,12 @@ async def login(user: UserLogin):
         }
     raise HTTPException(status_code=400, detail="Неверный логин или пароль")
 
-# ========== СОХРАНЕНИЕ ТОКЕНА УВЕДОМЛЕНИЙ ==========
-@app.post("/api/user/fcm-token")
-async def save_fcm_token(data: FcmToken, username: str = "superadmin"):
-    user = get_user(username)
-    if not user:
-        raise HTTPException(status_code=404, detail="Пользователь не найден")
-    user["fcm_token"] = data.token
-    return {"success": True}
-
-# ========== СОЗДАНИЕ ПОЛЬЗОВАТЕЛЕЙ ==========
 @app.post("/api/users/create")
 async def create_user(user: UserCreate, admin: str = "superadmin"):
     if not check_role(admin, ["super_admin"]):
         raise HTTPException(status_code=403, detail="Только главный админ")
-    
     if user.username in users_db:
         raise HTTPException(status_code=400, detail="Уже есть")
-    
     new_id = len(users_db) + 1
     users_db[user.username] = {
         "id": new_id,
@@ -113,15 +94,12 @@ async def create_user(user: UserCreate, admin: str = "superadmin"):
         "fcm_token": None,
         "created_at": datetime.now().isoformat()
     }
-    
     return {"success": True, "message": f"Создан {user.full_name}"}
 
-# ========== СПИСОК ПОЛЬЗОВАТЕЛЕЙ ==========
 @app.get("/api/users")
 async def get_users(admin: str = "superadmin"):
     if not check_role(admin, ["super_admin", "admin"]):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
-    
     return [
         {
             "id": u["id"],
@@ -134,32 +112,24 @@ async def get_users(admin: str = "superadmin"):
         for u in users_db.values()
     ]
 
-# ========== ПЕРЕВОД ==========
 @app.post("/api/transfer")
 async def transfer_money(tx: TransactionCreate, sender: str = "superadmin"):
     sender_data = get_user(sender)
     if not sender_data:
         raise HTTPException(status_code=404, detail="Отправитель не найден")
-
     receiver_data = None
-    receiver_username = None
     for name, data in users_db.items():
         if data["username"] == tx.receiver_username:
             receiver_data = data
-            receiver_username = name
             break
-
     if not receiver_data:
         raise HTTPException(status_code=404, detail="Получатель не найден")
-
     if sender_data["balance"] < tx.amount:
         raise HTTPException(status_code=400, detail="Недостаточно баксов")
-
-    # Перевод
+    
     sender_data["balance"] -= tx.amount
     receiver_data["balance"] += tx.amount
-
-    # Лог
+    
     tx_id = len(transactions_db) + 1
     transactions_db.append({
         "id": tx_id,
@@ -169,11 +139,7 @@ async def transfer_money(tx: TransactionCreate, sender: str = "superadmin"):
         "description": tx.description,
         "created_at": datetime.now().isoformat()
     })
-
-    # 👇 ЗДЕСЬ ПОТОМ БУДЕМ ОТПРАВЛЯТЬ УВЕДОМЛЕНИЕ
-    # if receiver_data["fcm_token"]:
-    #     send_push_notification(receiver_data["fcm_token"], "Перевод", f"{sender_data['full_name']} перевёл тебе {tx.amount} баксов")
-
+    
     return {
         "success": True,
         "message": f"Переведено {tx.amount} баксов",
@@ -182,32 +148,26 @@ async def transfer_money(tx: TransactionCreate, sender: str = "superadmin"):
         "to": receiver_data["full_name"]
     }
 
-# ========== ИСТОРИЯ ==========
 @app.get("/api/transactions")
 async def get_transactions(username: str = "superadmin"):
     user = get_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-
     result = []
     for tx in transactions_db:
         if tx["sender"] == user["full_name"] or tx["receiver"] == user["full_name"]:
             result.append(tx)
     return sorted(result, key=lambda x: x["created_at"], reverse=True)
 
-# ========== БАНКОМАТ ==========
 @app.post("/api/atm/deposit")
 async def deposit_cash(op: AtmOperation, username: str = "superadmin"):
     user = get_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    
     if user["cash"] < op.amount:
         raise HTTPException(status_code=400, detail="Недостаточно нала")
-    
     user["cash"] -= op.amount
     user["balance"] += op.amount
-
     return {
         "success": True,
         "message": f"Положил {op.amount} нала → +{op.amount} баксов",
@@ -220,13 +180,10 @@ async def withdraw_cash(op: AtmOperation, username: str = "superadmin"):
     user = get_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    
     if user["balance"] < op.amount:
         raise HTTPException(status_code=400, detail="Недостаточно баксов")
-    
     user["balance"] -= op.amount
     user["cash"] += op.amount
-
     return {
         "success": True,
         "message": f"Снял {op.amount} баксов → +{op.amount} нала",
@@ -234,13 +191,11 @@ async def withdraw_cash(op: AtmOperation, username: str = "superadmin"):
         "new_cash": user["cash"]
     }
 
-# ========== СТАТУС ==========
 @app.get("/api/user/status")
 async def user_status(username: str = "superadmin"):
     user = get_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    
     return {
         "full_name": user["full_name"],
         "role": user["role"],
@@ -248,15 +203,12 @@ async def user_status(username: str = "superadmin"):
         "cash": user["cash"]
     }
 
-# ========== АДМИН СТАТИСТИКА ==========
 @app.get("/api/admin/stats")
 async def admin_stats(admin: str = "superadmin"):
     if not check_role(admin, ["super_admin"]):
         raise HTTPException(status_code=403, detail="Только главный админ")
-    
     total_balance = sum(u["balance"] for u in users_db.values())
     total_cash = sum(u["cash"] for u in users_db.values())
-    
     return {
         "users_count": len(users_db),
         "total_balance": total_balance,
@@ -264,7 +216,6 @@ async def admin_stats(admin: str = "superadmin"):
         "transactions_count": len(transactions_db)
     }
 
-# ========== ЗАПУСК ==========
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
